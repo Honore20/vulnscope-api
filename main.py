@@ -1,6 +1,7 @@
 """
-VulnScope - Backend API
-Interroge l'API NVD du NIST pour trouver les CVE associées à des logiciels.
+VulnScope - Backend API v2
+Interroge l'API NVD du NIST pour trouver les CVE associees a des logiciels.
+Inclut le vectorString CVSS pour la traduction frontend.
 """
 
 from fastapi import FastAPI, Query
@@ -8,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from datetime import datetime, timedelta
 
-app = FastAPI(title="VulnScope API", version="1.0.0")
+app = FastAPI(title="VulnScope API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,30 +23,26 @@ NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
 
 def parse_cve(item: dict) -> dict:
-    """Extrait les données utiles d'un CVE brut NVD."""
     cve_data = item.get("cve", {})
     cve_id = cve_data.get("id", "N/A")
 
-    # Description
     descriptions = cve_data.get("descriptions", [])
     desc = next((d["value"] for d in descriptions if d["lang"] == "en"), "No description.")
 
-    # CVSS Score — essaye v31, puis v30, puis v2
     metrics = cve_data.get("metrics", {})
     score = 0.0
     severity = "UNKNOWN"
+    vector_string = None
 
     for version_key in ["cvssMetricV31", "cvssMetricV30", "cvssMetricV2"]:
         if version_key in metrics and metrics[version_key]:
             cvss = metrics[version_key][0].get("cvssData", {})
             score = cvss.get("baseScore", 0.0)
             severity = cvss.get("baseSeverity", "UNKNOWN")
+            vector_string = cvss.get("vectorString", None)
             break
 
-    # Date de publication
     published = cve_data.get("published", "")[:10]
-
-    # Références
     refs = cve_data.get("references", [])
     links = [r.get("url", "") for r in refs[:3]]
 
@@ -56,6 +53,7 @@ def parse_cve(item: dict) -> dict:
         "severity": severity.upper(),
         "published": published,
         "references": links,
+        "vectorString": vector_string,
     }
 
 
@@ -74,7 +72,6 @@ async def scan_software(
             response = await client.get(url)
 
         if response.status_code == 404:
-            # Essayer sans filtre de date
             url_fallback = f"{NVD_API_URL}?keywordSearch={keyword}&resultsPerPage=20"
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(url_fallback)
@@ -104,11 +101,4 @@ async def scan_software(
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "VulnScope API", "timestamp": datetime.utcnow().isoformat()}
-
-
-if __name__ == "__main__":
-    import uvicorn
-    import os
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    return {"status": "ok", "service": "VulnScope API", "version": "2.0", "timestamp": datetime.utcnow().isoformat()}
